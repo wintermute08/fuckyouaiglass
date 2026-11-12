@@ -53,7 +53,31 @@
   th.group { padding-top: 12px; color: var(--muted); font-weight: 600; }
   td.found { color: var(--warn); font-weight: 600; }
   td.last { color: var(--muted); font-size: .8rem; white-space: nowrap; }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  td.glasses-hit { color: var(--warn); font-weight: 700; }
   code { font-size: .85em; }
+
+  /* 조사 모드 */
+  #surveyPanel {
+    border: 1px solid var(--accent); border-radius: 10px; padding: 14px; margin: 12px 0;
+  }
+  #surveyStep { font-weight: 600; margin-bottom: 4px; }
+  #surveyHint { color: var(--muted); font-size: .88rem; margin-bottom: 8px; }
+  /* 선택 창이 화면 왼쪽 위를 가리니까 타이머는 오른쪽 아래에 띄움 */
+  #surveyTimer {
+    position: fixed; right: 16px; bottom: 16px; z-index: 10;
+    font-size: 1.4rem; font-variant-numeric: tabular-nums;
+    background: var(--card); border: 2px solid var(--accent); border-radius: 12px;
+    padding: 10px 16px; box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  }
+  #surveyTimer:empty { display: none; }
+  #surveyTimer.ready { color: var(--ok); border-color: var(--ok); }
+  .pad { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 8px; }
+  .pad button { padding: 12px 0; font-size: 1.05rem; }
+  .progress { display: flex; gap: 4px; margin-bottom: 10px; }
+  .progress span { flex: 1; height: 4px; border-radius: 2px; background: var(--line); }
+  .progress span.done { background: var(--accent); }
+  .progress span.now { background: var(--warn); }
 </style>
 </head>
 <body>
@@ -62,6 +86,47 @@
   <p class="sub">Web Bluetooth <code>requestDevice</code> + 제조사 ID / 서비스 UUID 필터. 플래그 없이 동작.</p>
 
   <div id="status">환경 확인 중…</div>
+
+  <div class="card">
+    <h2>조사 모드</h2>
+    <p>삼성 → 애플 → 구글 → 마이크로소프트 → AI 안경 → 전체 순서로 선택 창이 하나씩 떠. 창이 뜨면 <b>10초쯤 기다렸다가</b> 목록을 세고 <b>취소</b>를 눌러(페어링 누를 필요 없음). 개수 버튼을 누르면 바로 다음 창이 떠. 주소가 바뀌기 전에 2~3분 안에 끝내.</p>
+    <div class="row">
+      <input id="surveyNote" placeholder="위치·상황 메모 (예: 2-3반, 쉬는시간)" style="flex:1; min-width:200px">
+      <button id="btnSurvey">조사 시작</button>
+    </div>
+
+    <div id="surveyPanel" hidden>
+      <div class="progress" id="surveyProgress"></div>
+      <div id="surveyStep"></div>
+      <div id="surveyHint"></div>
+      <div id="surveyTimer"></div>
+      <div id="countArea" hidden>
+        <div class="pad" id="countPad"></div>
+        <div class="row" style="margin-bottom:8px">
+          <input id="countBig" type="number" min="10" placeholder="10개 이상" style="width:120px">
+          <button id="btnCountBig" class="secondary small">확인</button>
+          <button id="btnCountNone" class="secondary small">셀 수 없음</button>
+          <button id="btnRetry" class="secondary small">이 창 다시 열기</button>
+        </div>
+      </div>
+      <button id="btnAbort" class="secondary small">조사 중단</button>
+    </div>
+
+    <div class="tablewrap" style="margin-top:12px">
+      <table>
+        <thead><tr>
+          <th>시각</th><th>메모</th>
+          <th class="num">삼성</th><th class="num">애플</th><th class="num">구글</th><th class="num">MS</th>
+          <th class="num">AI 안경</th><th class="num">전체</th><th class="num">기타</th><th class="num">소요</th>
+        </tr></thead>
+        <tbody id="surveyRows"></tbody>
+      </table>
+    </div>
+    <p style="margin:8px 0 0; font-size:.82rem">기타 = 전체 − (삼성 + 애플 + 구글 + MS + AI 안경). 빈칸은 "셀 수 없음".</p>
+    <div class="row" style="margin-top:12px">
+      <button id="btnSurveyCsv" class="secondary">조사 결과 CSV</button>
+    </div>
+  </div>
 
   <div class="card">
     <h2>① 제조사별 검사</h2>
@@ -133,10 +198,12 @@
   const logRows = [];
   const $ = (id) => document.getElementById(id);
   const hex = (n) => '0x' + n.toString(16).toUpperCase().padStart(4, '0');
+  const now = () => new Date().toLocaleTimeString('ko-KR');
   const filterOf = (p) => p.kind === 'mfr'
     ? { manufacturerData: [{ companyIdentifier: p.id }] }
     : { services: [p.id] };
   const tagOf = (p) => (p.kind === 'mfr' ? '제조사 ' : '서비스 ') + hex(p.id);
+  const GLASSES_FILTERS = PROBES.filter((p) => p.glasses).map(filterOf);
 
   function setStatus(kind, text) {
     const el = $('status');
@@ -172,7 +239,7 @@
   }
 
   function addLog(mode, result, name, id) {
-    const row = { time: new Date().toLocaleTimeString('ko-KR'), mode, result, name, id, memo: '' };
+    const row = { time: now(), mode, result, name, id, memo: '' };
     logRows.push(row);
     const tr = document.createElement('tr');
     [row.time, row.mode, row.result, row.name, row.id].forEach((v, i) => {
@@ -225,6 +292,238 @@
     }
   }
 
+  function downloadCsv(filename, header, rows) {
+    const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = [header.map(esc).join(',')].concat(rows.map((r) => r.map(esc).join(',')));
+    const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    // 바로 해제하면 일부 브라우저에서 다운로드가 끊겨서 조금 미룸
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  // ───────── 조사 모드 ─────────
+  const SURVEY_STEPS = [
+    { key: 'samsung', label: '삼성', options: { filters: [filterOf({ kind: 'mfr', id: 0x0075 })] } },
+    { key: 'apple', label: '애플', options: { filters: [filterOf({ kind: 'mfr', id: 0x004C })] } },
+    { key: 'google', label: '구글', options: { filters: [filterOf({ kind: 'mfr', id: 0x00E0 })] } },
+    { key: 'microsoft', label: '마이크로소프트', options: { filters: [filterOf({ kind: 'mfr', id: 0x0006 })] } },
+    { key: 'glasses', label: 'AI 안경', options: { filters: GLASSES_FILTERS } },
+    { key: 'all', label: '전체 (필터 없음)', options: { acceptAllDevices: true } },
+  ];
+  const BRAND_KEYS = ['samsung', 'apple', 'google', 'microsoft', 'glasses'];
+  const READY_SEC = 10;
+  const surveys = [];
+  let survey = null;      // 진행 중인 조사
+  let timerId = null;
+
+  function fmtDuration(sec) {
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return m > 0 ? m + '분 ' + s + '초' : s + '초';
+  }
+
+  function othersOf(sv) {
+    const all = sv.counts.all;
+    if (typeof all !== 'number') return null;
+    let sum = 0;
+    for (const k of BRAND_KEYS) {
+      if (typeof sv.counts[k] !== 'number') return null;
+      sum += sv.counts[k];
+    }
+    return all - sum;
+  }
+
+  function renderSurveyRow(sv) {
+    if (!sv.tr) {
+      sv.tr = document.createElement('tr');
+      $('surveyRows').prepend(sv.tr);
+    }
+    const tr = sv.tr;
+    tr.innerHTML = '';
+    const cells = [
+      [sv.startText, ''],
+      [sv.note || '-', ''],
+    ];
+    BRAND_KEYS.concat(['all']).forEach((k) => {
+      const v = sv.counts[k];
+      const cls = k === 'glasses' && v > 0 ? 'num glasses-hit' : 'num';
+      const pending = v === undefined && !sv.aborted;
+      cells.push([pending ? '…' : (v == null ? '' : v), cls]);
+    });
+    const others = othersOf(sv);
+    cells.push([others === null ? '' : (others < 0 ? others + ' ?' : others), 'num']);
+    let dur = '';
+    if (sv.aborted) dur = '중단';
+    else if (sv.durationSec != null) dur = fmtDuration(sv.durationSec);
+    else dur = '진행 중';
+    cells.push([dur, 'num']);
+    cells.forEach(([text, cls]) => {
+      const td = document.createElement('td');
+      td.textContent = text;
+      if (cls) td.className = cls;
+      tr.appendChild(td);
+    });
+  }
+
+  function renderProgress() {
+    const wrap = $('surveyProgress');
+    wrap.innerHTML = '';
+    SURVEY_STEPS.forEach((_, i) => {
+      const s = document.createElement('span');
+      if (i < survey.step) s.className = 'done';
+      else if (i === survey.step) s.className = 'now';
+      wrap.appendChild(s);
+    });
+  }
+
+  function stopTimer() {
+    if (timerId) clearInterval(timerId);
+    timerId = null;
+  }
+
+  function startTimer() {
+    stopTimer();
+    const t0 = Date.now();
+    const el = $('surveyTimer');
+    const tick = () => {
+      const sec = Math.floor((Date.now() - t0) / 1000);
+      if (sec >= READY_SEC) {
+        el.className = 'ready';
+        el.textContent = sec + '초 — 이제 세고 취소 눌러';
+      } else {
+        el.className = '';
+        el.textContent = sec + '초 — 목록이 채워지는 중';
+      }
+    };
+    tick();
+    timerId = setInterval(tick, 250);
+  }
+
+  function startSurvey() {
+    if (!hasBluetooth()) return;
+    if (survey && !survey.done) {
+      survey.aborted = true;
+      survey.done = true;
+      renderSurveyRow(survey);
+    }
+    survey = {
+      start: Date.now(), startText: now(), note: $('surveyNote').value.trim(),
+      counts: {}, results: {}, step: 0, waiting: false, done: false,
+    };
+    surveys.push(survey);
+    renderSurveyRow(survey);
+    $('surveyPanel').hidden = false;
+    runStep();
+  }
+
+  async function runStep() {
+    const sv = survey;
+    const step = SURVEY_STEPS[sv.step];
+    sv.waiting = false;
+    renderProgress();
+    $('countArea').hidden = true;
+    $('surveyStep').textContent = (sv.step + 1) + '/' + SURVEY_STEPS.length + ' ' + step.label + ' 창 열림';
+    $('surveyHint').textContent = '10초쯤 기다렸다가 목록 개수를 세고 취소를 눌러.';
+    startTimer();
+
+    const result = await scan('조사: ' + step.label, step.options);
+    if (sv !== survey || sv.done) return; // 중간에 중단·재시작됨
+    stopTimer();
+    sv.results[step.key] = result;
+    sv.waiting = true;
+
+    $('surveyTimer').className = '';
+    $('surveyTimer').textContent = '';
+    $('surveyStep').textContent = (sv.step + 1) + '/' + SURVEY_STEPS.length + ' ' + step.label + ': 목록에 몇 개 있었어?';
+    if (result === '선택 없음' || result === '발견') {
+      $('surveyHint').textContent = '숫자를 누르면 바로 다음 창이 떠.';
+    } else {
+      $('surveyHint').textContent = '창이 정상적으로 안 떴어 (' + result + '). 기록 표의 메시지를 확인하고 "셀 수 없음" 또는 "다시 열기"를 눌러.';
+    }
+    $('countBig').value = '';
+    $('countArea').hidden = false;
+  }
+
+  function recordCount(n) {
+    const sv = survey;
+    if (!sv || sv.done || !sv.waiting) return;
+    sv.waiting = false;
+    sv.counts[SURVEY_STEPS[sv.step].key] = n;
+    renderSurveyRow(sv);
+    sv.step += 1;
+    if (sv.step < SURVEY_STEPS.length) {
+      runStep(); // 버튼 클릭 안에서 바로 다음 선택 창을 띄움
+    } else {
+      finishSurvey();
+    }
+  }
+
+  function finishSurvey() {
+    const sv = survey;
+    sv.done = true;
+    sv.durationSec = Math.round((Date.now() - sv.start) / 1000);
+    renderSurveyRow(sv);
+    stopTimer();
+    renderProgress();
+    $('countArea').hidden = true;
+    $('surveyTimer').textContent = '';
+    $('surveyStep').textContent = '조사 끝 (' + fmtDuration(sv.durationSec) + ')';
+    const notes = [];
+    if (sv.durationSec > 180) notes.push('3분을 넘겨서 중간에 주소가 바뀐 기기가 있을 수 있어.');
+    const others = othersOf(sv);
+    if (others !== null && others < 0) notes.push('기타가 음수야. 전체 창에서 덜 셌거나 한 기기가 여러 필터에 걸렸을 수 있어.');
+    if (sv.counts.glasses > 0) notes.push('AI 안경 필터에 걸린 기기가 있어! ① 제조사별 검사로 어느 필터인지 확인해.');
+    $('surveyHint').textContent = notes.join(' ') || '결과는 아래 표에 있어.';
+  }
+
+  function abortSurvey() {
+    if (!survey || survey.done) return;
+    survey.aborted = true;
+    survey.done = true;
+    stopTimer();
+    renderSurveyRow(survey);
+    $('surveyPanel').hidden = true;
+  }
+
+  (function buildPad() {
+    const pad = $('countPad');
+    for (let i = 0; i <= 9; i++) {
+      const b = document.createElement('button');
+      b.textContent = String(i);
+      b.addEventListener('click', () => recordCount(i));
+      pad.appendChild(b);
+    }
+  })();
+
+  $('btnSurvey').addEventListener('click', startSurvey);
+  $('btnAbort').addEventListener('click', abortSurvey);
+  $('btnCountNone').addEventListener('click', () => recordCount(null));
+  $('btnCountBig').addEventListener('click', () => {
+    const n = parseInt($('countBig').value, 10);
+    if (Number.isNaN(n) || n < 0) { alert('0 이상의 숫자를 입력해줘.'); return; }
+    recordCount(n);
+  });
+  $('countBig').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') $('btnCountBig').click();
+  });
+  $('btnRetry').addEventListener('click', () => {
+    if (survey && !survey.done && survey.waiting) runStep();
+  });
+
+  $('btnSurveyCsv').addEventListener('click', () => {
+    const header = ['시작 시각', '메모', '삼성', '애플', '구글', '마이크로소프트', 'AI 안경', '전체', '기타', '소요(초)', '상태'];
+    const rows = surveys.map((sv) => [
+      sv.startText, sv.note,
+      ...BRAND_KEYS.map((k) => sv.counts[k]),
+      sv.counts.all, othersOf(sv), sv.durationSec,
+      sv.aborted ? '중단' : (sv.done ? '완료' : '진행 중'),
+    ]);
+    downloadCsv('ble-survey.csv', header, rows);
+  });
+
+  // ───────── 제조사별 검사 ─────────
   function renderProbes() {
     const tbody = $('probes');
     PROBES.forEach((p) => {
@@ -254,7 +553,7 @@
       btn.addEventListener('click', async () => {
         if (!hasBluetooth()) return;
         const result = await scan(p.label + ' (' + tagOf(p) + ')', { filters: [filterOf(p)] });
-        tdLast.textContent = new Date().toLocaleTimeString('ko-KR') + ' ' + result;
+        tdLast.textContent = now() + ' ' + result;
       });
       tdBtn.appendChild(btn);
       [tdLabel, tdTag, tdLast, tdBtn].forEach((td) => tr.appendChild(td));
@@ -276,7 +575,7 @@
 
   $('btnGlasses').addEventListener('click', () => {
     if (!hasBluetooth()) return;
-    scan('AI 안경 통합', { filters: PROBES.filter((p) => p.glasses).map(filterOf) });
+    scan('AI 안경 통합', { filters: GLASSES_FILTERS });
   });
 
   $('btnAll').addEventListener('click', () => {
@@ -285,18 +584,9 @@
   });
 
   $('btnCsv').addEventListener('click', () => {
-    const header = ['시각', '검사', '결과', '기기 이름/메시지', '기기 ID', '메모'];
-    const esc = (v) => '"' + String(v).replace(/"/g, '""') + '"';
-    const lines = [header.map(esc).join(',')].concat(
-      logRows.map((r) => [r.time, r.mode, r.result, r.name, r.id, r.memo].map(esc).join(','))
-    );
-    const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'ble-scan-log.csv';
-    a.click();
-    // 바로 해제하면 일부 브라우저에서 다운로드가 끊겨서 조금 미룸
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    downloadCsv('ble-scan-log.csv',
+      ['시각', '검사', '결과', '기기 이름/메시지', '기기 ID', '메모'],
+      logRows.map((r) => [r.time, r.mode, r.result, r.name, r.id, r.memo]));
   });
 
   $('btnClear').addEventListener('click', () => {
