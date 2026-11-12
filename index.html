@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 안경 BLE 점검</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --text: #1a1a1a; --muted: #666666;
+    --line: #e3e3e0; --accent: #2f5bea; --warn: #c2410c; --ok: #15803d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141414; --card: #1e1e1e; --text: #eeeeee; --muted: #a3a3a3;
+      --line: #333333; --accent: #6b8cff; --warn: #fb923c; --ok: #4ade80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); line-height: 1.5;
+    font-family: system-ui, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: .92rem; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px; margin-bottom: 14px;
+  }
+  .card h2 { font-size: 1rem; margin: 0 0 6px; }
+  .card p { margin: 0 0 12px; color: var(--muted); font-size: .9rem; }
+  button {
+    font: inherit; border: 0; border-radius: 8px; padding: 10px 14px;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  button.small { padding: 6px 12px; font-size: .85rem; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  select, input {
+    font: inherit; padding: 9px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  }
+  td input { width: 100%; min-width: 120px; padding: 5px 8px; font-size: .85rem; }
+  #status {
+    padding: 10px 12px; border-radius: 8px; font-size: .9rem;
+    border: 1px solid var(--line); background: var(--card); margin-bottom: 14px;
+  }
+  #status.ok { color: var(--ok); border-color: var(--ok); }
+  #status.warn { color: var(--warn); border-color: var(--warn); }
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th.group { padding-top: 12px; color: var(--muted); font-weight: 600; }
+  td.found { color: var(--warn); font-weight: 600; }
+  td.last { color: var(--muted); font-size: .8rem; white-space: nowrap; }
+  code { font-size: .85em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>AI 안경 BLE 점검 테스트</h1>
+  <p class="sub">Web Bluetooth <code>requestDevice</code> + 제조사 ID / 서비스 UUID 필터. 플래그 없이 동작.</p>
+
+  <div id="status">환경 확인 중…</div>
+
+  <div class="card">
+    <h2>① 제조사별 검사</h2>
+    <p>필터를 하나씩 돌려서 선택 창에 뜬 기기가 어느 회사 것인지 확인해. 선택 창에 보이는 주소(예: <code>7A:35:…</code>)를 아래 기록 표 메모 칸에 적어둬. 주소는 약 15분마다 바뀌니까 한 번에 몰아서 돌려야 비교할 수 있어.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>대상</th><th>필터</th><th>마지막 결과</th><th></th></tr></thead>
+        <tbody id="probes"></tbody>
+      </table>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <select id="customKind">
+        <option value="mfr">제조사 ID</option>
+        <option value="svc">서비스 UUID</option>
+      </select>
+      <input id="customId" placeholder="예: 0x0075" size="10">
+      <button id="btnCustom" class="secondary">직접 입력 검사</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>② AI 안경 통합 검사</h2>
+    <p>메타·레이밴·스냅의 제조사 ID 4개와 서비스 UUID 4개를 한 번에 걸어. 목록이 비어 있으면 "근처에 없음"이 아니라 "감지 안 됨"이야. 뭔가 뜨면 ①에서 하나씩 돌려서 어느 필터에 걸렸는지 확인해.</p>
+    <button id="btnGlasses">AI 안경 검사</button>
+  </div>
+
+  <div class="card">
+    <h2>③ 주변 BLE 전체 보기</h2>
+    <p>필터 없이 주변 모든 BLE 기기를 보여줘. 개수는 페이지가 셀 수 없으니 선택 창을 스크린샷으로 남겨.</p>
+    <button id="btnAll" class="secondary">전체 보기</button>
+  </div>
+
+  <div class="card">
+    <h2>기록</h2>
+    <p>목록에서 기기를 선택하면 기록돼. 선택해도 연결이나 페어링은 안 해. 창을 닫으면 "선택 없음"으로 남아. 메모 칸은 CSV에도 들어가.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>시각</th><th>검사</th><th>결과</th><th>기기 이름 / 메시지</th><th>기기 ID</th><th>메모 (본 주소 등)</th></tr></thead>
+        <tbody id="log"></tbody>
+      </table>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button id="btnCsv" class="secondary">CSV 다운로드</button>
+      <button id="btnClear" class="secondary">기록 지우기</button>
+    </div>
+  </div>
+</main>
+
+<script>
+  // 출처: Bluetooth SIG assigned numbers (company_identifiers.yaml, member_uuids.yaml)
+  // kind: 'mfr' = 제조사 ID (manufacturerData 필터), 'svc' = 16비트 서비스 UUID (services 필터)
+  const PROBES = [
+    { group: '내 기기 확인용' },
+    { label: 'Apple', kind: 'mfr', id: 0x004C },
+    { label: 'Samsung', kind: 'mfr', id: 0x0075 },
+    { label: 'Google', kind: 'mfr', id: 0x00E0 },
+    { label: 'Microsoft', kind: 'mfr', id: 0x0006 },
+    { group: 'AI 안경 관련' },
+    { label: 'Luxottica (레이밴·오클리 메타)', kind: 'mfr', id: 0x0D53, glasses: true },
+    { label: 'Meta Platforms', kind: 'mfr', id: 0x01AB, glasses: true },
+    { label: 'Meta Platforms Technologies', kind: 'mfr', id: 0x058E, glasses: true },
+    { label: 'Snap (Spectacles)', kind: 'mfr', id: 0x03C2, glasses: true },
+    { label: 'Meta Platforms', kind: 'svc', id: 0xFEB7, glasses: true },
+    { label: 'Meta Platforms', kind: 'svc', id: 0xFEB8, glasses: true },
+    { label: 'Meta Platforms Technologies', kind: 'svc', id: 0xFD5F, glasses: true },
+    { label: 'Snap', kind: 'svc', id: 0xFE45, glasses: true },
+  ];
+
+  const logRows = [];
+  const $ = (id) => document.getElementById(id);
+  const hex = (n) => '0x' + n.toString(16).toUpperCase().padStart(4, '0');
+  const filterOf = (p) => p.kind === 'mfr'
+    ? { manufacturerData: [{ companyIdentifier: p.id }] }
+    : { services: [p.id] };
+  const tagOf = (p) => (p.kind === 'mfr' ? '제조사 ' : '서비스 ') + hex(p.id);
+
+  function setStatus(kind, text) {
+    const el = $('status');
+    el.className = kind;
+    el.textContent = text;
+  }
+
+  function hasBluetooth() {
+    if ('bluetooth' in navigator) return true;
+    checkEnv();
+    return false;
+  }
+
+  async function checkEnv() {
+    if (!window.isSecureContext) {
+      setStatus('warn', 'HTTPS 주소가 아니라서 Web Bluetooth를 쓸 수 없어. https:// 주소나 다운로드한 파일(file://)로 열어줘.');
+      return;
+    }
+    if (!('bluetooth' in navigator)) {
+      setStatus('warn', '이 브라우저에서 Web Bluetooth가 없어. 지원 안 하는 브라우저이거나(크롬·엣지만 지원) 관리자가 막아둔 상태야.');
+      return;
+    }
+    try {
+      const available = await navigator.bluetooth.getAvailability();
+      if (available) {
+        setStatus('ok', 'Web Bluetooth 사용 가능. 블루투스 어댑터 감지됨.');
+      } else {
+        setStatus('warn', 'Web Bluetooth는 있는데 블루투스 어댑터가 없거나 꺼져 있어. 블루투스를 켜고 새로고침해줘.');
+      }
+    } catch (e) {
+      setStatus('warn', '상태 확인 실패: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  function addLog(mode, result, name, id) {
+    const row = { time: new Date().toLocaleTimeString('ko-KR'), mode, result, name, id, memo: '' };
+    logRows.push(row);
+    const tr = document.createElement('tr');
+    [row.time, row.mode, row.result, row.name, row.id].forEach((v, i) => {
+      const td = document.createElement('td');
+      td.textContent = v;
+      if (i === 2 && v === '발견') td.className = 'found';
+      tr.appendChild(td);
+    });
+    const memoTd = document.createElement('td');
+    const memo = document.createElement('input');
+    memo.placeholder = '예: 7A:35, 57:9C';
+    memo.addEventListener('input', () => { row.memo = memo.value; });
+    memoTd.appendChild(memo);
+    tr.appendChild(memoTd);
+    $('log').prepend(tr);
+    return row;
+  }
+
+  // 결과를 기록하고, 결과 문자열('발견' / '선택 없음' / ...)을 돌려줌
+  async function scan(mode, options) {
+    try {
+      const device = await navigator.bluetooth.requestDevice(options);
+      addLog(mode, '발견', device.name || '(이름 없음)', device.id);
+      return '발견';
+    } catch (e) {
+      const name = e && e.name ? e.name : 'Error';
+      const msg = e && e.message ? e.message : String(e);
+      let result;
+      if (name === 'NotFoundError' && /cancel/i.test(msg)) {
+        result = '선택 없음';
+        addLog(mode, result, '목록이 비었거나 창을 닫음', '');
+      } else if (/adapter/i.test(msg)) {
+        result = '오류';
+        addLog(mode, result, '블루투스가 꺼져 있거나 없음', '');
+      } else if (/blocklist/i.test(msg)) {
+        // 크롬이 이 필터 자체를 거부한 경우. 학교 정책 차단과 구분해야 함
+        result = '필터 거부';
+        addLog(mode, result, '크롬 블록리스트에 걸린 필터: ' + msg, '');
+      } else if (name === 'TypeError') {
+        result = '필터 거부';
+        addLog(mode, result, name + ': ' + msg, '');
+      } else if (name === 'SecurityError' || name === 'NotAllowedError' || /disabled|blocked|policy|permission/i.test(msg)) {
+        result = '차단';
+        addLog(mode, result, name + ': ' + msg, '');
+      } else {
+        result = '오류';
+        addLog(mode, result, name + ': ' + msg, '');
+      }
+      return result;
+    }
+  }
+
+  function renderProbes() {
+    const tbody = $('probes');
+    PROBES.forEach((p) => {
+      const tr = document.createElement('tr');
+      if (p.group) {
+        const th = document.createElement('th');
+        th.colSpan = 4;
+        th.className = 'group';
+        th.textContent = p.group;
+        tr.appendChild(th);
+        tbody.appendChild(tr);
+        return;
+      }
+      const tdLabel = document.createElement('td');
+      tdLabel.textContent = p.label;
+      const tdTag = document.createElement('td');
+      const code = document.createElement('code');
+      code.textContent = tagOf(p);
+      tdTag.appendChild(code);
+      const tdLast = document.createElement('td');
+      tdLast.className = 'last';
+      tdLast.textContent = '-';
+      const tdBtn = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.className = 'small';
+      btn.textContent = '검사';
+      btn.addEventListener('click', async () => {
+        if (!hasBluetooth()) return;
+        const result = await scan(p.label + ' (' + tagOf(p) + ')', { filters: [filterOf(p)] });
+        tdLast.textContent = new Date().toLocaleTimeString('ko-KR') + ' ' + result;
+      });
+      tdBtn.appendChild(btn);
+      [tdLabel, tdTag, tdLast, tdBtn].forEach((td) => tr.appendChild(td));
+      tbody.appendChild(tr);
+    });
+  }
+
+  $('btnCustom').addEventListener('click', () => {
+    if (!hasBluetooth()) return;
+    const kind = $('customKind').value;
+    const n = parseInt($('customId').value.trim(), 16);
+    if (Number.isNaN(n) || n < 0 || n > 0xFFFF) {
+      alert('ID를 0x0000 ~ 0xFFFF 형식으로 입력해줘.');
+      return;
+    }
+    const p = { label: '직접 입력', kind, id: n };
+    scan(p.label + ' (' + tagOf(p) + ')', { filters: [filterOf(p)] });
+  });
+
+  $('btnGlasses').addEventListener('click', () => {
+    if (!hasBluetooth()) return;
+    scan('AI 안경 통합', { filters: PROBES.filter((p) => p.glasses).map(filterOf) });
+  });
+
+  $('btnAll').addEventListener('click', () => {
+    if (!hasBluetooth()) return;
+    scan('전체', { acceptAllDevices: true });
+  });
+
+  $('btnCsv').addEventListener('click', () => {
+    const header = ['시각', '검사', '결과', '기기 이름/메시지', '기기 ID', '메모'];
+    const esc = (v) => '"' + String(v).replace(/"/g, '""') + '"';
+    const lines = [header.map(esc).join(',')].concat(
+      logRows.map((r) => [r.time, r.mode, r.result, r.name, r.id, r.memo].map(esc).join(','))
+    );
+    const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'ble-scan-log.csv';
+    a.click();
+    // 바로 해제하면 일부 브라우저에서 다운로드가 끊겨서 조금 미룸
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  $('btnClear').addEventListener('click', () => {
+    logRows.length = 0;
+    $('log').innerHTML = '';
+  });
+
+  renderProbes();
+  checkEnv();
+</script>
+</body>
+</html>
